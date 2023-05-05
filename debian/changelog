@@ -1,0 +1,39 @@
+softether-vpn (5.02.5180-20210624) UNRELEASED; urgency=medium
+
+  * new upstream
+
+ -- coolshou <coolshou2060@gmail.com>  Fri, 31 Mar 2023 14:54:42 +0800
+
+softether-vpn (5.01.9674+git20200806+8181039+dfsg2-2build1) jammy; urgency=medium
+
+  * No-change rebuild against openssl3
+
+ -- Simon Chopin <simon.chopin@canonical.com>  Wed, 24 Nov 2021 11:24:33 +0100
+
+softether-vpn (5.01.9674+git20200806+8181039+dfsg2-2) unstable; urgency=medium
+
+  * Install the hamcore link to the vpnclient package as well
+    (actually closes: #973403).
+
+ -- Andrej Shadura <andrewsh@debian.org>  Thu, 03 Dec 2020 10:35:09 +0100
+
+softether-vpn (5.01.9674+git20200806+8181039+dfsg2-1) unstable; urgency=medium
+
+  * Update Files-Excluded, revert erroneour removal of upstream files
+    (Closes: #973403).
+  * Add gitlab-ci.yml.
+
+ -- Andrej Shadura <andrewsh@debian.org>  Mon, 16 Nov 2020 14:16:59 +0100
+
+softether-vpn (5.01.9674+git20200806+8181039+dfsg-2) unstable; urgency=medium
+
+  [ Chris Lamb ]
+  * Make the build reproducible (Closes: #972496).
+
+ -- Andrej Shadura <andrewsh@debian.org>  Mon, 19 Oct 2020 14:14:55 +0200
+
+softether-vpn (5.01.9674+git20200806+8181039+dfsg-1) unstable; urgency=low
+
+  * Initial upload (Closes: #968447).
+
+ -- Andrej Shadura <andrewsh@debian.org>  Sat, 15 Aug 2020 22:54:32 +0200

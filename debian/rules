@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/architecture.mk
+
+export DH_VERBOSE=1
+
+%:
+	dh $@ --buildsystem=cmake --builddirectory=$(CURDIR)
+
+override_dh_auto_configure:
+	mkdir -p src/Mayaqua/3rdparty/cpu_features/
+	touch src/Mayaqua/3rdparty/cpu_features/CMakeLists.txt
+	dh_auto_configure -- -DSKIP_CPU_FEATURES=ON -DSE_PIDDIR=/run/softether \
+						 -DSE_LOGDIR=/var/log/softether -DSE_DBDIR=/var/lib/softether

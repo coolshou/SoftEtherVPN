@@ -1,0 +1,3 @@
+/usr/libexec/softether/vpnserver/vpnserver
+/usr/bin/vpnserver
+/lib/systemd/system/*vpnserver.service

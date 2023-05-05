@@ -1,0 +1,3 @@
+/usr/libexec/softether/vpnclient/vpnclient
+/usr/bin/vpnclient
+/lib/systemd/system/*vpnclient.service

@@ -1,0 +1,76 @@
+include:
+  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
+  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
+
+.publish-aptly: &publish-aptly
+  stage: publish
+  image: $SALSA_CI_IMAGES_APTLY
+  variables:
+    GIT_STRATEGY: none
+    REPO_PATH: 'aptly'
+    PUBKEY_FILENAME: 'public-key.asc'
+  except:
+    variables:
+      - $CI_COMMIT_TAG != null && $SALSA_CI_ENABLE_PIPELINE_ON_TAGS !~ /^(1|yes|true)$/
+      - $SALSA_CI_DISABLE_APTLY =~ /^(1|yes|true)$/
+  script:
+    - export REPO_URL="${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/${REPO_PATH}"
+    - export REPO_PUBKEY_URL="${REPO_URL}/${PUBKEY_FILENAME}"
+    - aptly repo create -distribution ${RELEASE} -component main ${CI_PROJECT_NAME}
+    - aptly repo add ${CI_PROJECT_NAME} "${WORKING_DIR}"
+    - aptly repo show -with-packages ${CI_PROJECT_NAME}
+    # accept misspelled var for backwards-compatibility (see https://salsa.debian.org/salsa-ci-team/pipeline/issues/114)
+    - export SALSA_CI_APTLY_GPG_PASSPHRASE="${SALSA_CI_APTLY_GPG_PASSPHRASE:=${SALSA_CI_APTLY_GPG_PASSPHASE}}"
+    - |
+        if dpkg --compare-versions $(dpkg-query -W -f='{Version}' aptly) gt 1.4.0~; then \
+            export GPG=gpg; \
+            export GPG_TTY=$(tty); \
+        else \
+            export GPG=gpg1; \
+        fi
+    - |
+        if [ -n "${SALSA_CI_APTLY_GPG_KEY}" ]; then \
+            echo "${SALSA_CI_APTLY_GPG_KEY}" \
+                | ${GPG} --import ${SALSA_CI_APTLY_GPG_PASSPHRASE:+ --passphrase "${SALSA_CI_APTLY_GPG_PASSPHRASE}"}; \
+        else \
+            export SALSA_CI_APTLY_GPG_PASSPHRASE="${SALSA_CI_APTLY_GPG_PASSPHRASE:-${CI_PROJECT_NAME}:${CI_PIPELINE_ID}}"; \
+            rngd -r /dev/urandom; \
+            printf "Key-Type: RSA\nKey-Length: 2048\nName-Real: ${DEBFULLNAME}\nName-Email: ${DEBEMAIL}\nExpire-Date: 0\nPassphrase: ${SALSA_CI_APTLY_GPG_PASSPHRASE}\n%%commit" | \
+                ${GPG} --batch --gen-key; \
+        fi
+        ${GPG} --export --armor > "${PUBKEY_FILENAME}"
+    - |
+        ARCHITECTURES=$(aptly repo show -with-packages ${CI_PROJECT_NAME} | \
+            awk 'BEGIN {FS="_"} /^Packages:/ {x=NR} (x && NR>x) {print $3}' | \
+            sort -u | tr '\n' ','); \
+        ARCHITECTURES=${ARCHITECTURES%,}; \
+        aptly publish repo -batch \
+            ${ARCHITECTURES:+ -architectures=${ARCHITECTURES}} \
+            ${SALSA_CI_APTLY_GPG_PASSPHRASE:+ -passphrase="${SALSA_CI_APTLY_GPG_PASSPHRASE}"} \
+            ${CI_PROJECT_NAME}
+    - |
+        mkdir -p "${CI_PROJECT_DIR}/${REPO_PATH}"
+        cp -a ~/.aptly/public/. "${CI_PROJECT_DIR}/${REPO_PATH}"
+        mv "${PUBKEY_FILENAME}" "${CI_PROJECT_DIR}/${REPO_PATH}/${PUBKEY_FILENAME}"
+        envsubst < /etc/aptly/index.html.template > "${CI_PROJECT_DIR}/${REPO_PATH}/index.html"
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/${REPO_PATH}
+  dependencies:
+    - build
+
+pages:
+  stage: test
+  dependencies:
+    - aptly
+  artifacts:
+    paths:
+      - public
+  script:
+    - mv aptly public
+    - sed -i -e 's,https://salsa.debian.org/debian/softether-vpn/-/jobs/[0-9]*/artifacts/raw/aptly,https://debian.pages.debian.net/softether-vpn,g' -e 's,job-[0-9]*\.list,softether-vpn.list,g' public/index.html
+
+variables:
+    SALSA_CI_DISABLE_APTLY: 0
+    SALSA_CI_DISABLE_REPROTEST: 1
+    RELEASE: 'buster'
