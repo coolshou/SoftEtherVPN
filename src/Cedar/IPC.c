@@ -244,7 +244,8 @@ IPC *NewIPCByParam(CEDAR *cedar, IPC_PARAM *param, UINT *error_code)
 	             param->UserName, param->Password, param->WgKey, error_code,
 	             &param->ClientIp, param->ClientPort, &param->ServerIp, param->ServerPort,
 	             param->ClientHostname, param->CryptName,
-	             param->BridgeMode, param->Mss, NULL, param->ClientCertificate, param->Layer);
+	             param->BridgeMode, param->Mss, NULL, param->ClientCertificate, param->RadiusOK,
+				 param->Layer);
 
 	return ipc;
 }
@@ -253,7 +254,7 @@ IPC *NewIPCByParam(CEDAR *cedar, IPC_PARAM *param, UINT *error_code)
 IPC *NewIPC(CEDAR *cedar, char *client_name, char *postfix, char *hubname, char *username, char *password, char *wg_key,
             UINT *error_code, IP *client_ip, UINT client_port, IP *server_ip, UINT server_port,
             char *client_hostname, char *crypt_name,
-            bool bridge_mode, UINT mss, EAP_CLIENT *eap_client, X *client_certificate,
+            bool bridge_mode, UINT mss, EAP_CLIENT *eap_client, X *client_certificate, bool external_auth,
             UINT layer)
 {
 	IPC *ipc;
@@ -359,6 +360,10 @@ IPC *NewIPC(CEDAR *cedar, char *client_name, char *postfix, char *hubname, char 
 	else if (client_certificate != NULL)
 	{
 		p = PackLoginWithOpenVPNCertificate(hubname, username, client_certificate);
+	}
+	else if (external_auth)
+	{
+		p = PackLoginWithExternal(hubname, username);
 	}
 	else
 	{
@@ -1512,7 +1517,9 @@ void IPCProcessL3EventsEx(IPC *ipc, UINT64 now)
 									// We save the router advertisement data for later use
 									IPCIPv6AddRouterPrefixes(ipc, &p->ICMPv6HeaderPacketInfo.OptionList, src_mac, &ip_src);
 									IPCIPv6AssociateOnNDTEx(ipc, &ip_src, src_mac, true);
-									IPCIPv6AssociateOnNDTEx(ipc, &ip_src, p->ICMPv6HeaderPacketInfo.OptionList.SourceLinkLayer->Address, true);
+									if (p->ICMPv6HeaderPacketInfo.OptionList.SourceLinkLayer != NULL) {
+										IPCIPv6AssociateOnNDTEx(ipc, &ip_src, p->ICMPv6HeaderPacketInfo.OptionList.SourceLinkLayer->Address, true);
+									}
 									ndtProcessed = true;
 									header_size = sizeof(ICMPV6_ROUTER_ADVERTISEMENT_HEADER);
 									break;
@@ -1532,7 +1539,8 @@ void IPCProcessL3EventsEx(IPC *ipc, UINT64 now)
 								// Remove link-layer address options for Windows clients (required on Windows 11)
 								if (header_size > 0)
 								{
-									UCHAR *src = p->ICMPv6HeaderPacketInfo.Headers.HeaderPointer + header_size;
+									//UCHAR *src = p->ICMPv6HeaderPacketInfo.Headers.HeaderPointer + header_size;
+									UCHAR* src = (UCHAR *)p->ICMPv6HeaderPacketInfo.Headers.HeaderPointer + header_size;// Cast the pointer to UCHAR *.
 									UINT opt_size = p->ICMPv6HeaderPacketInfo.DataSize - header_size;
 									UCHAR *dst = src;
 									UINT removed = 0;
@@ -2348,7 +2356,14 @@ void IPCIPv6AddRouterPrefixes(IPC *ipc, ICMPV6_OPTION_LIST *recvPrefix, UCHAR *m
 				IntToSubnetMask6(&newRA->RoutedMask, recvPrefix->Prefix[i]->SubnetLength);
 				CopyIP(&newRA->RouterAddress, ip);
 				Copy(newRA->RouterMacAddress, macAddress, 6);
-				Copy(newRA->RouterLinkLayerAddress, recvPrefix->SourceLinkLayer->Address, 6);
+				if (recvPrefix->SourceLinkLayer != NULL)
+				{
+					Copy(newRA->RouterLinkLayerAddress, recvPrefix->SourceLinkLayer->Address, 6);
+				}
+				else
+				{
+					Zero(newRA->RouterLinkLayerAddress, 6);
+				}
 				Add(ipc->IPv6RouterAdvs, newRA);
 			}
 		}
@@ -2651,7 +2666,7 @@ void IPCIPv6SendUnicast(IPC *ipc, void *data, UINT size, IP *next_ip)
 		}
 
 		destMac = ra.RouterMacAddress;
-		if (!IsMacUnicast(destMac) && !IsMacInvalid(ra.RouterMacAddress))
+		if (!IsMacUnicast(destMac) && !IsMacInvalid(ra.RouterLinkLayerAddress))
 		{
 			destMac = ra.RouterLinkLayerAddress;
 		}

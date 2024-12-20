@@ -2,10 +2,8 @@
 
 ||Badges|
 |---|---|
-|AppVeyor|[![AppVeyor build status](https://ci.appveyor.com/api/projects/status/github/softethervpn/softethervpn?branch=master&svg=true)](https://ci.appveyor.com/project/softethervpn/softethervpn) |
 |GitLab CI|[![GitLab CI build status](https://gitlab.com/SoftEther/SoftEtherVPN/badges/master/pipeline.svg)](https://gitlab.com/SoftEther/SoftEtherVPN/pipelines)|
 |Coverity Scan|[![Coverity Scan build status](https://scan.coverity.com/projects/16304/badge.svg)](https://scan.coverity.com/projects/softethervpn-softethervpn)|
-|Azure Pipelines|[![Azure Pipelines build status for Nightly](https://dev.azure.com/SoftEther-VPN/SoftEther%20VPN/_apis/build/status/6?api-version=6.0-preview.1)](https://dev.azure.com/SoftEther-VPN/SoftEther%20VPN/_build?definitionId=6)|
 |Cirrus CI|[![Cirrus CI build status](https://api.cirrus-ci.com/github/SoftEtherVPN/SoftEtherVPN.svg)](https://cirrus-ci.com/github/SoftEtherVPN/SoftEtherVPN)|
 
 - [SoftEther VPN](#softether-vpn)
@@ -100,9 +98,6 @@ https://github.com/davidebeatrici
 
 Ilya Shipitsin (Since Jul 21, 2018)
 https://github.com/chipitsine
-
-Yihong Wu (Since Jul 16, 2021)
-https://github.com/domosekai
 
 
 # SOFTETHER VPN ADVANTAGES
@@ -206,7 +201,9 @@ Also SoftEther VPN [Stable Edition](https://www.freshports.org/security/softethe
 
 ## For Windows
 
-[Nightly builds](https://dev.azure.com/SoftEther-VPN/SoftEther%20VPN/_build?definitionId=6)
+[Releases](https://github.com/SoftEtherVPN/SoftEtherVPN/releases)
+
+[Nightly builds](https://github.com/SoftEtherVPN/SoftEtherVPN/actions/workflows/windows.yml)
 (choose appropriate platform, then find binaries or installers as artifacts)
 
 ## From binary installers (stable channel)
@@ -292,7 +289,7 @@ Please send patches to us through GitHub.
 
 # DEAR SECURITY EXPERTS
 
-If you find a bug or a security vulnerability please kindly inform us
+If you find a bug or a security vulnerability please [kindly inform](https://github.com/SoftEtherVPN/SoftEtherVPN/security/advisories/new) us
 about the problem immediately so that we can fix the security problem
 to protect a lot of users around the world as soon as possible.
 

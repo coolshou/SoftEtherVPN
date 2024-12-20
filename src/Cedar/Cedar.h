@@ -366,6 +366,7 @@
 #define	AUTHTYPE_ROOTCERT				3			// Root certificate which is issued by trusted Certificate Authority
 #define	AUTHTYPE_RADIUS					4			// Radius authentication
 #define	AUTHTYPE_NT						5			// Windows NT authentication
+#define AUTHTYPE_EXTERNAL				96			// External authentication (completed)
 #define	AUTHTYPE_WIREGUARD_KEY			97			// WireGuard public key authentication
 #define	AUTHTYPE_OPENVPN_CERT    		98			// TLS client certificate authentication
 #define	AUTHTYPE_TICKET					99			// Ticket authentication
@@ -674,6 +675,9 @@
 // For UNIX virtual LAN card related constant
 // 
 //////////////////////////////////////////////////////////////////////
+
+#define	UNIX_VLAN_CLIENT_IFACE_PREFIX		"vpn"			// Prefix of UNIX virtual LAN card interface (used for client)
+#define	UNIX_VLAN_BRIDGE_IFACE_PREFIX		"tap"			// Prefix of UNIX virtual LAN card interface (used for bridge destination)
 
 #ifndef	UNIX_BSD
 #define	TAP_FILENAME_1				"/dev/net/tun"
@@ -1018,6 +1022,7 @@ void DelHubEx(CEDAR *c, HUB *h, bool no_lock);
 void StopAllHub(CEDAR *c);
 void StopAllConnection(CEDAR *c);
 void AddConnection(CEDAR *cedar, CONNECTION *c);
+UINT GetUnestablishedConnections(CEDAR *cedar);
 void DelConnection(CEDAR *cedar, CONNECTION *c);
 void SetCedarCipherList(CEDAR *cedar, char *name);
 void InitCedar();
@@ -1042,6 +1047,7 @@ bool AddNoSsl(CEDAR *c, IP *ip);
 void DecrementNoSsl(CEDAR *c, IP *ip, UINT num_dec);
 void DeleteOldNoSsl(CEDAR *c);
 NON_SSL *SearchNoSslList(CEDAR *c, IP *ip);
+bool IsInNoSsl(CEDAR *c, IP *ip);
 void FreeTinyLog(TINY_LOG *t);
 void WriteTinyLog(TINY_LOG *t, char *str);
 TINY_LOG *NewTinyLog();

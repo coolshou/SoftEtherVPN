@@ -1,9 +1,9 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 
 set(BUILD_NUMBER CACHE STRING "The number of the current build.")
 
 if ("${BUILD_NUMBER}" STREQUAL "")
-	set(BUILD_NUMBER "5180")
+	set(BUILD_NUMBER "5187")
 endif()
 
 if (BUILD_NUMBER LESS 5180)
@@ -53,7 +53,7 @@ if(UNIX)
   #
   # use rpath for locating installed libraries
   #
-  set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
+  set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
   set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
   include(CheckIncludeFile)

@@ -244,9 +244,11 @@ OS_DISPATCH_TABLE *UnixGetDispatchTable()
 	return &t;
 }
 
-static void *signal_received_for_ignore(int sig, siginfo_t *info, void *ucontext) 
+static void signal_received_for_ignore(int sig, siginfo_t *info, void *ucontext)
 {
-	return NULL;
+	(void)sig;
+	(void)info;
+	(void)ucontext;
 }
 
 // Ignore the signal flew to the thread
@@ -256,7 +258,7 @@ void UnixIgnoreSignalForThread(int sig)
 
 	Zero(&sa, sizeof(sa));
 	sa.sa_handler = NULL;
-	sa.sa_sigaction = signal_received_for_ignore;
+	sa.sa_sigaction = &signal_received_for_ignore;
 	sa.sa_flags = SA_SIGINFO;
 
 	sigemptyset(&sa.sa_mask);
@@ -2004,6 +2006,68 @@ void UnixGetSystemTime(SYSTEMTIME *system_time)
 	system_time->wMilliseconds = tv.tv_usec / 1000;
 
 	pthread_mutex_unlock(&get_time_lock);
+}
+
+UINT64 UnixGetHighresTickNano64(bool raw)
+{
+#if	defined(OS_WIN32) || defined(CLOCK_REALTIME) || defined(CLOCK_MONOTONIC) || defined(CLOCK_HIGHRES)
+	struct timespec t;
+	UINT64 ret;
+	static bool akirame = false;
+
+	if (akirame)
+	{
+		return UnixGetTick64() * 1000000ULL;
+	}
+
+	Zero(&t, sizeof(t));
+
+	if (raw == false)
+	{
+		// Function to get the boot time of the system
+		// Be careful. The Implementation is depend on the system.
+#ifdef	CLOCK_HIGHRES
+		clock_gettime(CLOCK_HIGHRES, &t);
+#else	// CLOCK_HIGHRES
+#ifdef	CLOCK_MONOTONIC
+		clock_gettime(CLOCK_MONOTONIC, &t);
+#else	// CLOCK_MONOTONIC
+		clock_gettime(CLOCK_REALTIME, &t);
+#endif	// CLOCK_MONOTONIC
+#endif	// CLOCK_HIGHRES
+	}
+	else
+	{
+		// Function to get the boot time of the system
+		// Be careful. The Implementation is depend on the system.
+#ifdef	CLOCK_HIGHRES
+		clock_gettime(CLOCK_HIGHRES, &t);
+#else	// CLOCK_HIGHRES
+#ifdef	CLOCK_MONOTONIC_RAW
+		clock_gettime(CLOCK_MONOTONIC_RAW, &t);
+#else	// CLOCK_MONOTONIC_RAW
+#ifdef	CLOCK_MONOTONIC
+		clock_gettime(CLOCK_MONOTONIC, &t);
+#else	// CLOCK_MONOTONIC
+		clock_gettime(CLOCK_REALTIME, &t);
+#endif	// CLOCK_MONOTONIC
+#endif	// CLOCK_MONOTONIC_RAW
+#endif	// CLOCK_HIGHRES
+	}
+
+	ret = ((UINT64)((UINT)t.tv_sec)) * 1000000000LL + (UINT64)t.tv_nsec;
+
+	if (akirame == false && ret == 0)
+	{
+		ret = UnixGetTick64() * 1000000ULL;
+		akirame = true;
+	}
+
+	return ret;
+
+#else	
+	return UnixGetTick64() * 1000000ULL;
+#endif
 }
 
 // Get the system timer (64bit)

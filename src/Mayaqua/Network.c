@@ -540,6 +540,13 @@ LIST *Win32GetNicList()
 
 		if (a->Type == 6 && a->AddressSize == 6)
 		{
+			// If the connection state of the interface is unknown, then exclude it.
+			// Unknown means that the device is not plugged into the local host.
+			if (a->MediaConnectState == MediaConnectStateUnknown)
+			{
+				continue;
+			}
+
 			NIC_ENTRY *e = ZeroMalloc(sizeof(NIC_ENTRY));
 
 			StrCpy(e->IfName, sizeof(e->IfName), a->Title);
@@ -1191,7 +1198,9 @@ void RUDPProcess_NatT_Recv(RUDP_STACK *r, UDPPACKET *udp)
 		bool is_ok = PackGetBool(p, "ok");
 		UINT64 tran_id = PackGetInt64(p, "tran_id");
 
-		ExtractAndApplyDynList(p);
+		// This ExtractAndApplyDynList() calling was removed because it is not actually used and could be abused by
+		// illegal UDP packets that spoof the source IP address. 2023-6-14 Daiyuu Nobori
+		// ExtractAndApplyDynList(p);
 
 		if (r->ServerMode)
 		{
@@ -5724,6 +5733,10 @@ SSL_PIPE *NewSslPipeEx3(bool server_mode, X *x, K *k, LIST *chain, DH_CTX *dh, b
 	SSL_PIPE *s;
 	SSL *ssl;
 	SSL_CTX *ssl_ctx = NewSSLCtx(server_mode);
+	if (ssl_ctx == NULL)
+	{
+		return NULL;
+	}
 
 	Lock(openssl_lock);
 	{
@@ -5797,6 +5810,10 @@ SSL_PIPE *NewSslPipeEx3(bool server_mode, X *x, K *k, LIST *chain, DH_CTX *dh, b
 #endif
 
 		ssl = SSL_new(ssl_ctx);
+		if (ssl == NULL)
+		{
+			return NULL;
+		}
 
 		SSL_set_ex_data(ssl, GetSslClientCertIndex(), clientcert);
 	}
@@ -11727,6 +11744,10 @@ bool StartSSLEx3(SOCK *sock, X *x, K *priv, LIST *chain, UINT ssl_timeout, char 
 	}
 
 	ssl_ctx = NewSSLCtx(sock->ServerMode);
+	if (ssl_ctx == NULL)
+	{
+		return false;
+	}
 
 	Lock(openssl_lock);
 	{
@@ -11839,6 +11860,12 @@ bool StartSSLEx3(SOCK *sock, X *x, K *priv, LIST *chain, UINT ssl_timeout, char 
 #endif
 
 		sock->ssl = SSL_new(ssl_ctx);
+
+		if (sock->ssl == NULL)
+		{
+			return false;
+		}
+
 		SSL_set_fd(sock->ssl, (int)sock->socket);
 
 #ifdef	SSL_CTRL_SET_TLSEXT_HOSTNAME
@@ -11884,6 +11911,10 @@ bool StartSSLEx3(SOCK *sock, X *x, K *priv, LIST *chain, UINT ssl_timeout, char 
 		Unlock(openssl_lock);
 	}
 
+	#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+		SSL_set1_groups_list(sock->ssl, PQ_GROUP_LIST);
+	#endif
+	
 	if (sock->ServerMode)
 	{
 //		Lock(ssl_connect_lock);
@@ -11963,7 +11994,7 @@ bool StartSSLEx3(SOCK *sock, X *x, K *priv, LIST *chain, UINT ssl_timeout, char 
 		//		Unlock(ssl_connect_lock);
 	}
 	else
-	{
+	{	
 		prev_timeout = GetTimeout(sock);
 		SetTimeout(sock, ssl_timeout);
 		// Client mode
@@ -12264,9 +12295,15 @@ UINT SecureRecv(SOCK *sock, void *data, UINT size)
 				Debug("%s %u SecureRecv() Disconnect\n", __FILE__, __LINE__);
 				return 0;
 			}
+			ERR_clear_error();
 			ret = SSL_peek(ssl, &c, sizeof(c));
 		}
 		Unlock(sock->ssl_lock);
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+		// 2021/09/10: After OpenSSL 3.x.x, both 0 and negative values might mean retryable.
+		// See: https://github.com/openssl/openssl/blob/435981cbadad2c58c35bacd30ca5d8b4c9bea72f/doc/man3/SSL_read.pod
+		// > Old documentation indicated a difference between 0 and -1, and that -1 was retryable.
+		// > You should instead call SSL_get_error() to find out if it's retryable.
 		if (ret == 0)
 		{
 			// The communication have been disconnected
@@ -12274,7 +12311,8 @@ UINT SecureRecv(SOCK *sock, void *data, UINT size)
 			Debug("%s %u SecureRecv() Disconnect\n", __FILE__, __LINE__);
 			return 0;
 		}
-		if (ret < 0)
+#endif
+		if (ret <= 0)
 		{
 			// An error has occurred
 			e = SSL_get_error(ssl, ret);
@@ -12282,14 +12320,18 @@ UINT SecureRecv(SOCK *sock, void *data, UINT size)
 			{
 				if (e == SSL_ERROR_SSL
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
-				        &&
-				        sock->ssl->s3->send_alert[0] == SSL3_AL_FATAL &&
-				        sock->ssl->s3->send_alert[0] != sock->Ssl_Init_Async_SendAlert[0] &&
-				        sock->ssl->s3->send_alert[1] != sock->Ssl_Init_Async_SendAlert[1]
+					&&
+					sock->ssl->s3->send_alert[0] == SSL3_AL_FATAL &&
+					sock->ssl->s3->send_alert[0] != sock->Ssl_Init_Async_SendAlert[0] &&
+					sock->ssl->s3->send_alert[1] != sock->Ssl_Init_Async_SendAlert[1]
 #endif
-				   )
+					)
 				{
-					Debug("%s %u SSL Fatal Error on ASYNC socket !!!\n", __FILE__, __LINE__);
+					UINT ssl_err_no;
+					while (ssl_err_no = ERR_get_error()){
+						Debug("%s %u SSL_ERROR_SSL on ASYNC socket !!! ssl_err_no = %u: '%s'\n", __FILE__, __LINE__, ssl_err_no, ERR_error_string(ssl_err_no, NULL));
+					};
+
 					Disconnect(sock);
 					return 0;
 				}
@@ -12316,14 +12358,15 @@ UINT SecureRecv(SOCK *sock, void *data, UINT size)
 		}
 #endif	// OS_UNIX
 
-// Run the time-out thread for SOLARIS
+		// Run the time-out thread for SOLARIS
 #ifdef UNIX_SOLARIS
 		ttparam = NewSocketTimeout(sock);
 #endif // UNIX_SOLARIS
 
+		ERR_clear_error();
 		ret = SSL_read(ssl, data, size);
 
-// Stop the timeout thread
+		// Stop the timeout thread
 #ifdef UNIX_SOLARIS
 		FreeSocketTimeout(ttparam);
 #endif // UNIX_SOLARIS
@@ -12336,7 +12379,11 @@ UINT SecureRecv(SOCK *sock, void *data, UINT size)
 		}
 #endif	// OS_UNIX
 
-		if (ret < 0)
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+		if (ret < 0) // OpenSSL version < 3.0.0
+#else
+		if (ret <= 0) // OpenSSL version >= 3.0.0
+#endif
 		{
 			e = SSL_get_error(ssl, ret);
 		}
@@ -12359,6 +12406,12 @@ UINT SecureRecv(SOCK *sock, void *data, UINT size)
 
 		return (UINT)ret;
 	}
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+	// 2021/09/10: After OpenSSL 3.x.x, both 0 and negative values might mean retryable.
+	// See: https://github.com/openssl/openssl/blob/435981cbadad2c58c35bacd30ca5d8b4c9bea72f/doc/man3/SSL_read.pod
+	// > Old documentation indicated a difference between 0 and -1, and that -1 was retryable.
+	// > You should instead call SSL_get_error() to find out if it's retryable.
 	if (ret == 0)
 	{
 		// Disconnect the communication
@@ -12366,20 +12419,26 @@ UINT SecureRecv(SOCK *sock, void *data, UINT size)
 		//Debug("%s %u SecureRecv() Disconnect\n", __FILE__, __LINE__);
 		return 0;
 	}
+#endif
+
 	if (sock->AsyncMode)
 	{
 		if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE || e == SSL_ERROR_SSL)
 		{
 			if (e == SSL_ERROR_SSL
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
-			        &&
-			        sock->ssl->s3->send_alert[0] == SSL3_AL_FATAL &&
-			        sock->ssl->s3->send_alert[0] != sock->Ssl_Init_Async_SendAlert[0] &&
-			        sock->ssl->s3->send_alert[1] != sock->Ssl_Init_Async_SendAlert[1]
+				&&
+				sock->ssl->s3->send_alert[0] == SSL3_AL_FATAL &&
+				sock->ssl->s3->send_alert[0] != sock->Ssl_Init_Async_SendAlert[0] &&
+				sock->ssl->s3->send_alert[1] != sock->Ssl_Init_Async_SendAlert[1]
 #endif
-			   )
+				)
 			{
-				Debug("%s %u SSL Fatal Error on ASYNC socket !!!\n", __FILE__, __LINE__);
+				UINT ssl_err_no;
+				while (ssl_err_no = ERR_get_error()) {
+					Debug("%s %u SSL_ERROR_SSL on ASYNC socket !!! ssl_err_no = %u: '%s'\n", __FILE__, __LINE__, ssl_err_no, ERR_error_string(ssl_err_no, NULL));
+				};
+
 				Disconnect(sock);
 				return 0;
 			}
@@ -12388,8 +12447,8 @@ UINT SecureRecv(SOCK *sock, void *data, UINT size)
 			return SOCK_LATER;
 		}
 	}
+	Debug("%s %u e=%u SecureRecv() Disconnect\n", __FILE__, __LINE__, e);
 	Disconnect(sock);
-	Debug("%s %u SecureRecv() Disconnect\n", __FILE__, __LINE__);
 	return 0;
 }
 
@@ -12416,8 +12475,13 @@ UINT SecureSend(SOCK *sock, void *data, UINT size)
 			return 0;
 		}
 
+		ERR_clear_error();
 		ret = SSL_write(ssl, data, size);
-		if (ret < 0)
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
+		if (ret < 0) // OpenSSL version < 3.0.0
+#else
+		if (ret <= 0) // OpenSSL version >= 3.0.0
+#endif
 		{
 			e = SSL_get_error(ssl, ret);
 		}
@@ -12439,6 +12503,8 @@ UINT SecureSend(SOCK *sock, void *data, UINT size)
 		sock->WriteBlocked = false;
 		return (UINT)ret;
 	}
+
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
 	if (ret == 0)
 	{
 		// Disconnect
@@ -12446,18 +12512,29 @@ UINT SecureSend(SOCK *sock, void *data, UINT size)
 		Disconnect(sock);
 		return 0;
 	}
+#endif
 
 	if (sock->AsyncMode)
 	{
 		// Confirmation of the error value
 		if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE || e == SSL_ERROR_SSL)
 		{
+			if (e == SSL_ERROR_SSL)
+			{
+				UINT ssl_err_no;
+				while (ssl_err_no = ERR_get_error()) {
+					Debug("%s %u SSL_ERROR_SSL on ASYNC socket !!! ssl_err_no = %u: '%s'\n", __FILE__, __LINE__, ssl_err_no, ERR_error_string(ssl_err_no, NULL));
+				};
+
+				Disconnect(sock);
+				return 0;
+			}
+
 			sock->WriteBlocked = true;
 			return SOCK_LATER;
 		}
-		Debug("%s %u e=%u\n", __FILE__, __LINE__, e);
 	}
-	//Debug("%s %u SecureSend() Disconnect\n", __FILE__, __LINE__);
+	Debug("%s %u e=%u SecureSend() Disconnect\n", __FILE__, __LINE__, e);
 	Disconnect(sock);
 	return 0;
 }
@@ -13108,7 +13185,6 @@ SOCK *ListenEx63(UINT port, bool local_only, bool enable_ca, IP *listen_ip)
 #ifdef OS_WIN32
 	if (enable_ca)
 	{
-		setsockopt(s, SOL_SOCKET, SO_CONDITIONAL_ACCEPT, (char *)&true_flag, sizeof(true_flag));
 		backlog = 1;
 	}
 #endif
@@ -13634,6 +13710,70 @@ int connect_timeout(SOCKET s, struct sockaddr *addr, int size, int timeout, bool
 	}
 }
 #else
+#if 0
+LPSTR PrintError(int ErrorCode)
+{
+	static char Message[1024];
+
+	// If this program was multithreaded, we'd want to use
+	// FORMAT_MESSAGE_ALLOCATE_BUFFER instead of a static buffer here.
+	// (And of course, free the buffer when we were done with it)
+
+	FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS |
+		FORMAT_MESSAGE_MAX_WIDTH_MASK, NULL, ErrorCode,
+		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+		(LPSTR)Message, 1024, NULL);
+	return Message;
+}
+#else
+char *PrintError(int ErrorCode)
+{
+	char *Message;
+	switch (ErrorCode) {
+	case WSAEFAULT:
+		Message = "Bad address.";
+		break;
+
+	case WSAEWOULDBLOCK:
+		Message = "Resource temporarily unavailable.";
+		break;
+
+	case WSAEINPROGRESS:
+		Message = "Operation now in progress.";
+		break;
+
+	case WSAEALREADY:
+		Message = "Operation already in progress.";
+		break;
+
+	case WSAEAFNOSUPPORT:
+		Message = "Address family not supported by protocol family.";
+		break;
+
+	case WSAEADDRINUSE:
+		Message = "Address already in use.";
+		break;
+
+	case WSAEADDRNOTAVAIL:
+		Message = "Cannot assign requested address.";
+		break;
+
+	case WSAEISCONN:
+		Message = "Socket is already connected.";	// Added on AUG.10, 2023
+		break;
+
+	case WSAEINVAL:
+		Message = "Invalid argument.";	// Added on AUG.10, 2023
+		break;
+
+	default:
+		Message = "";
+		break;
+	}
+	return Message;
+}
+#endif
+
 // Connection with timeout (Win32 version)
 int connect_timeout(SOCKET s, struct sockaddr *addr, int size, int timeout, bool *cancel_flag)
 {
@@ -13765,8 +13905,71 @@ void SetSockHighPriority(SOCK *s, bool flag)
 	SetSockTos(s, (flag ? 16 : 0));
 }
 
+// Bind the socket to IPv4 or IPV6 address
+int bind_sock(SOCKET sock, IP *ip, UINT port)
+{
+	//char tmp[MAX_HOST_NAME_LEN + 1];
+	//memset(tmp, 0, sizeof(tmp));
+	//IPToStr(tmp, sizeof(tmp), ip);
+	//Debug("bind_sock(): Binding... IP address %s:%d\n", tmp, port);
+
+	if (IsIP4(ip))
+	{
+		// Declare variables
+		struct sockaddr_in sockaddr_in;
+
+		Zero(&sockaddr_in, sizeof(sockaddr_in));
+
+		// Set up the sockaddr structure
+		sockaddr_in.sin_family = AF_INET;
+		IPToInAddr(&sockaddr_in.sin_addr, ip);
+		sockaddr_in.sin_port = htons((USHORT)port);
+		//inet_pton(AF_INET, tmp, &addr_in.sin_addr.s_addr);
+
+		UINT true_flag = 1;
+		// This only have enabled for UNIX system since there is a bug
+		// in the implementation of REUSEADDR in Windows OS
+		(void)setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&true_flag, sizeof(true_flag));
+
+		// Bind the socket using the information in the sockaddr structure
+		return (bind(sock, (struct sockaddr *)&sockaddr_in, sizeof(sockaddr_in)));
+	}
+	else
+	{
+		// Declare variables
+		struct sockaddr_in6 sockaddr_in;
+
+		Zero(&sockaddr_in, sizeof(sockaddr_in));
+
+		// Set up the sockaddr structure
+		sockaddr_in.sin6_family = AF_INET6;
+		IPToInAddr6(&sockaddr_in.sin6_addr, ip);
+		sockaddr_in.sin6_scope_id = ip->ipv6_scope_id;
+		sockaddr_in.sin6_port = htons((USHORT)port);
+		//inet_pton(AF_INET6, tmp, &sockaddr_in.sin6_addr.s6_bytes);
+
+		UINT true_flag = 1;
+#ifdef	OS_UNIX
+		// It is necessary to set the IPv6 Only flag on a UNIX system
+		(void)setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &true_flag, sizeof(true_flag));
+#endif	// OS_UNIX
+		// This only have enabled for UNIX system since there is a bug
+		// in the implementation of REUSEADDR in Windows OS
+		(void)setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&true_flag, sizeof(true_flag));
+
+		// Bind the socket using the information in the sockaddr structure
+		return (bind(sock, (struct sockaddr *)&sockaddr_in, sizeof(sockaddr_in)));
+	}
+}
+
 // Connect to the IPv4 host using a socket
-SOCKET ConnectTimeoutIPv4(IP *ip, UINT port, UINT timeout, bool *cancel_flag)
+SOCKET ConnectTimeoutIPv4(IP* ip, UINT port, UINT timeout, bool* cancel_flag)
+{
+	return BindConnectTimeoutIPv4(BIND_LOCALIP_NULL, BIND_LOCALPORT_NULL, ip, port, timeout, cancel_flag);
+}
+
+// Connect to the IPv4 host using a socket
+SOCKET BindConnectTimeoutIPv4(IP* localIP, UINT localport, IP* ip, UINT port, UINT timeout, bool* cancel_flag)
 {
 	SOCKET s;
 	struct sockaddr_in sockaddr4;
@@ -13783,6 +13986,38 @@ SOCKET ConnectTimeoutIPv4(IP *ip, UINT port, UINT timeout, bool *cancel_flag)
 
 	// Socket creation
 	s = socket(AF_INET, SOCK_STREAM, 0);
+
+	// Top of Bind outgoing connection
+	if (s != INVALID_SOCKET) {
+		int ier;
+		IP tmpIP;
+		IP *tmpIP2;
+
+		if (localIP == BIND_LOCALIP_NULL) {
+			StrToIP(&tmpIP, "0.0.0.0");	// A NULL address for the argument "localIP" is treated as if "0.0.0.0" in IPV4 was specified.
+			tmpIP2 = &tmpIP;
+		}
+		else {
+			tmpIP2 = localIP;
+		}
+
+		if ((IsZeroIP(tmpIP2) == false) || (localport != 0)) {
+
+			// Bind the socket
+			if (bind_sock(s, tmpIP2, localport) != 0) {
+#ifdef	OS_WIN32
+				ier = WSAGetLastError();
+				Debug("IPv4 bind() failed with error: %d %s\n", ier, PrintError(ier));
+#else
+				Debug("IPv4 bind() failed with error: %d %s\n", errno, strerror(errno));
+#endif
+				closesocket(s);
+				s = INVALID_SOCKET;
+			}
+		}
+	}
+	// Bottom of Bind outgoing connection
+
 	if (s != INVALID_SOCKET)
 	{
 		// Connection
@@ -14045,7 +14280,21 @@ void ConnectThreadForRUDP(THREAD *thread, void *param)
 }
 
 // IPv4 connection thread (multiple protocols, multiple addresses)
-void ConnectThreadForIPv4(THREAD *thread, void *param)
+void ConnectThreadForIPv4(THREAD* thread, void* param)
+{
+	CONNECT_SERIAL_PARAM* p = (CONNECT_SERIAL_PARAM*)param;
+	if (thread == NULL || p == NULL)
+	{
+		return;
+	}
+	p->LocalIP = BIND_LOCALIP_NULL;
+	p->LocalPort = BIND_LOCALPORT_NULL;
+	return  BindConnectThreadForIPv4(thread, param);
+}
+
+// IPv4 connection thread (multiple protocols, multiple addresses)
+//void ConnectThreadForIPv4(THREAD* thread, void* param)
+void BindConnectThreadForIPv4(THREAD *thread, void *param)
 {
 	SOCKET s = INVALID_SOCKET;
 	IP current_ip;
@@ -14098,7 +14347,8 @@ void ConnectThreadForIPv4(THREAD *thread, void *param)
 		if (use_natt == false)
 		{
 			// Normal connection without using NAT-T
-			s = ConnectTimeoutIPv4(ip, p->Port, p->Timeout, p->CancelFlag);
+//			s = ConnectTimeoutIPv4(ip, p->Port, p->Timeout, p->CancelFlag);
+			s = BindConnectTimeoutIPv4(p->LocalIP, p->LocalPort, ip, p->Port, p->Timeout, p->CancelFlag);
 
 			if (s != INVALID_SOCKET)
 			{
@@ -14400,7 +14650,21 @@ void ConnectThreadForIPv4(THREAD *thread, void *param)
 }
 
 // IPv6 connection thread (multiple addresses)
-void ConnectThreadForIPv6(THREAD *thread, void *param)
+void ConnectThreadForIPv6(THREAD* thread, void* param)
+{
+	CONNECT_SERIAL_PARAM* p = (CONNECT_SERIAL_PARAM*)param;
+	if (thread == NULL || p == NULL)
+	{
+		return;
+	}
+	p->LocalIP = BIND_LOCALIP_NULL;
+	p->LocalPort = BIND_LOCALPORT_NULL;
+	return  BindConnectThreadForIPv6(thread, param);
+}
+
+// IPv6 connection thread (multiple addresses)
+//void ConnectThreadForIPv6(THREAD *thread, void *param)
+void BindConnectThreadForIPv6(THREAD* thread, void* param)
 {
 	SOCKET s = INVALID_SOCKET;
 	IP current_ip;
@@ -14455,6 +14719,38 @@ void ConnectThreadForIPv6(THREAD *thread, void *param)
 
 		// Socket creation
 		s = socket(AF_INET6, SOCK_STREAM, 0);
+
+		// Top of Bind outgoing connection
+		if (s != INVALID_SOCKET){
+			int ier;
+			IP tmpIP;
+			IP *tmpIP2;
+
+			if (p->LocalIP == BIND_LOCALIP_NULL) {
+				StrToIP(&tmpIP, "0::0");	// A NULL address for the argument "p->LocalIP" is treated as if "0::0" in IPV6 was specified.
+				tmpIP2 = &tmpIP;
+			}
+			else {
+				tmpIP2 = p->LocalIP;
+			}
+
+			if ((IsZeroIP(tmpIP2) == false) || (p->LocalPort != 0)){
+
+				// Bind the socket
+				if (bind_sock(s, tmpIP2, p->LocalPort) != 0) {
+#ifdef	OS_WIN32
+					ier = WSAGetLastError();
+					Debug("IPv6 bind() failed with error: %d %s\n", ier, PrintError(ier));
+#else
+					Debug("IPv6 bind() failed with error: %d %s\n", errno, strerror(errno));
+#endif
+					closesocket(s);
+					s = INVALID_SOCKET;
+				}
+			}
+		}
+		// Bottom of Bind outgoing connection
+
 		if (s != INVALID_SOCKET)
 		{
 			// Connection
@@ -14581,6 +14877,18 @@ SOCK *ConnectEx4(char *hostname, UINT port, UINT timeout, bool *cancel_flag, cha
 }
 SOCK *ConnectEx5(char *hostname, UINT port, UINT timeout, bool *cancel_flag, char *nat_t_svc_name, UINT *nat_t_error_code, bool try_start_ssl, bool no_get_hostname, SSL_VERIFY_OPTION *ssl_option, UINT *ssl_err, char *hint_str, IP *ret_ip)
 {
+	return BindConnectEx5(BIND_LOCALIP_NULL, BIND_LOCALPORT_NULL, hostname, port, timeout, cancel_flag, nat_t_svc_name, nat_t_error_code, try_start_ssl, no_get_hostname, ssl_option, ssl_err, hint_str, ret_ip);
+}
+
+//SOCK* ConnectEx4(char* hostname, UINT port, UINT timeout, bool* cancel_flag, char* nat_t_svc_name, UINT* nat_t_error_code, bool try_start_ssl, bool no_get_hostname, IP* ret_ip)
+SOCK *BindConnectEx4(IP *localIP, UINT localport, char *hostname, UINT port, UINT timeout, bool *cancel_flag, char *nat_t_svc_name, UINT *nat_t_error_code, bool try_start_ssl, bool no_get_hostname, IP *ret_ip)
+{
+//	return ConnectEx5(hostname, port, timeout, cancel_flag, nat_t_svc_name, nat_t_error_code, try_start_ssl, no_get_hostname, NULL, NULL, NULL, ret_ip);
+	return BindConnectEx5(localIP, localport, hostname, port, timeout, cancel_flag, nat_t_svc_name, nat_t_error_code, try_start_ssl, no_get_hostname, NULL, NULL, NULL, ret_ip);
+}
+//SOCK *ConnectEx5(char *hostname, UINT port, UINT timeout, bool *cancel_flag, char *nat_t_svc_name, UINT *nat_t_error_code, bool try_start_ssl, bool no_get_hostname, SSL_VERIFY_OPTION *ssl_option, UINT *ssl_err, char *hint_str, IP *ret_ip)
+SOCK *BindConnectEx5(IP *localIP, UINT localport, char *hostname, UINT port, UINT timeout, bool *cancel_flag, char *nat_t_svc_name, UINT *nat_t_error_code, bool try_start_ssl, bool no_get_hostname, SSL_VERIFY_OPTION *ssl_option, UINT *ssl_err, char *hint_str, IP *ret_ip)
+{
 	bool dummy = false;
 	bool use_natt = false;
 	bool force_use_natt = false;
@@ -14675,6 +14983,16 @@ SOCK *ConnectEx5(char *hostname, UINT port, UINT timeout, bool *cancel_flag, cha
 	if (LIST_NUM(iplist_v6) > 0)
 	{
 		p6.IpList = iplist_v6;
+
+		if (localIP == BIND_LOCALIP_NULL) {
+			p6.LocalIP = BIND_LOCALIP_NULL;	// Make the NULL address passing through
+		}
+		else {
+			CopyIP(&p6.LocalIP_Cache, localIP);
+			p6.LocalIP = &p6.LocalIP_Cache;
+		}
+		p6.LocalPort = localport;
+
 		p6.Port = port;
 		p6.Timeout = timeout;
 		StrCpy(p6.Hostname, sizeof(p6.Hostname), hostname);
@@ -14688,13 +15006,24 @@ SOCK *ConnectEx5(char *hostname, UINT port, UINT timeout, bool *cancel_flag, cha
 		p6.Ret_Ip = &ret_ip6;
 		p6.RetryDelay = 250;
 		p6.Delay = 0;
-		t6 = NewThread(ConnectThreadForIPv6, &p6);
+//		t6 = NewThread(ConnectThreadForIPv6, &p6);
+		t6 = NewThread(BindConnectThreadForIPv6, &p6);	// For binding a socket
 	}
 
 	// IPv4 connection thread
 	if (LIST_NUM(iplist_v4) > 0)
 	{
 		p4.IpList = iplist_v4;
+
+		if (localIP == BIND_LOCALIP_NULL) {
+			p4.LocalIP = BIND_LOCALIP_NULL;	// Make the NULL address passing through
+		}
+		else {
+			CopyIP(&p4.LocalIP_Cache, localIP);
+			p4.LocalIP = &p4.LocalIP_Cache;
+		}
+		p4.LocalPort = localport;
+
 		p4.Port = port;
 		p4.Timeout = timeout;
 		StrCpy(p4.Hostname, sizeof(p4.Hostname), hostname);
@@ -14713,7 +15042,8 @@ SOCK *ConnectEx5(char *hostname, UINT port, UINT timeout, bool *cancel_flag, cha
 		p4.Ret_Ip = &ret_ip4;
 		p4.RetryDelay = 250;
 		p4.Delay = 250;		// Delay by 250ms to prioritize IPv6 (RFC 6555 recommends 150-250ms, Chrome uses 300ms)
-		t4 = NewThread(ConnectThreadForIPv4, &p4);
+//		t4 = NewThread(ConnectThreadForIPv4, &p4);
+		t4 = NewThread(BindConnectThreadForIPv4, &p4);	// For binding a socket
 	}
 
 	if (t6 == NULL || t4 == NULL)
@@ -15868,7 +16198,10 @@ void keylog_cb_func(const SSL* ssl, const char* line)
 struct ssl_ctx_st *NewSSLCtx(bool server_mode)
 {
 	struct ssl_ctx_st *ctx = SSL_CTX_new(SSLv23_method());
-
+	if(ctx == NULL)
+	{
+		return NULL;
+	}
 	// It resets some parameters.
 	if (server_mode)
 	{
@@ -15922,6 +16255,12 @@ UINT GetOSSecurityLevel()
 {
 	UINT security_level_new = 0, security_level_set_ssl_version = 0;
 	struct ssl_ctx_st *ctx = SSL_CTX_new(SSLv23_method());
+
+	if (ctx == NULL)
+	{
+		return security_level_new;
+	}
+
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
 	security_level_new = SSL_CTX_get_security_level(ctx);
